@@ -1,7 +1,5 @@
 import pandas as pd
-from scipy.optimize import linprog
-from datetime import date,time
-import numpy as np
+import pulp
 
 def create_constraint_matrix(x):
 
@@ -10,38 +8,31 @@ def create_constraint_matrix(x):
     else:
         return 1
 
+def compute_going(x):
+    if x == 'Theatre Cleaning' or x == 'Closed: Check @DCM_Lines for Venue Options' or pd.isnull(x):
+        return (0,0)
+    else:
+        return (x,vars[x].varValue)
+
 
 df = pd.read_excel('dcm_schedule.xlsx',index_col='Time')
+df = df.iloc[9:]
+weight_matrix = df.applymap(create_constraint_matrix)
 
-constraint_matrix_pre = df.applymap(create_constraint_matrix)
+dcm_lpp = pulp.LpProblem("dcm_lpp",pulp.LpMaximize)
 
-num_data_points = len(df)
-constraint_vector = []
-row_vec = []
-counter = 0
+variables = set(df.values.flatten())
+variables.pop()
 
-for i in range(num_data_points):
-    for j in range(num_data_points*11):
-        if j in range(i*11,i*11+11):
-            row_vec.append(constraint_matrix_pre.values[i][counter])
-            counter+=1
-        else:
-            row_vec.append(0)
+vars = pulp.LpVariable.dicts("value",(i for i in variables),lowBound=0,upBound=1,cat=pulp.LpInteger)
 
-    constraint_vector.append(row_vec)
-    row_vec = []
-    counter = 0
+dcm_lpp += (pulp.lpSum([vars[i] for i in vars.keys()]))
 
-variable_req = np.identity(num_data_points*11)*-1
-variable_req_2 = np.identity(num_data_points*11)
-a_ub = np.concatenate((variable_req, variable_req_2))
-# constraint_matrix.to_excel('constraint_matrix.xlsx')
-eq_constraint_vec = [1]*len(constraint_matrix_pre)
-objective_func_vec = [-1]*(len(constraint_vector[0]))
-ub_constraint_vec = [0]*len(constraint_vector[0])
-ub_constraint_vec_2 = [1]*len(constraint_vector[0])
+# Only computing for a subset of shows while TBD shows remain on the calendar.
+for row in range(len(df)-200):
+    dcm_lpp += (pulp.lpSum(vars[i] for i in list(df.ix[row]) if type(i) is str and i != 'Theatre Cleaning' and i != 'Closed: Check @DCM_Lines for Venue Options')) == 1
 
-b_ub = np.concatenate((ub_constraint_vec, ub_constraint_vec_2))
+dcm_lpp.solve()
+going_df = df.applymap(compute_going)
 
-final_solution = linprog(objective_func_vec,A_eq=constraint_vector,b_eq=eq_constraint_vec,A_ub=a_ub,b_ub=b_ub)
-print(final_solution.x)
+going_df.to_excel('optimal_dcm.xlsx',index_label="Time")
